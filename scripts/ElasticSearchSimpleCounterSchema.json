@@ -1,0 +1,12 @@
+curl -XPOST localhost:8080/simplecounter -d '{
+    "mappings" : {
+        "counter" : {
+            "properties": {
+				"TimeStamp":    { "type": "date",    "doc_values": true ,"format": "yyyy-MM-dd HH:mm:ss.SSS"},
+				"eventCategory":         { "type": "string" },
+				"eventType":         { "type": "string", "doc_values": true, "index": "no" },
+				"occurrenceCount":         { "type": "integer", "doc_values": true, "index": "no" }
+			}
+        }
+    }
+}'
