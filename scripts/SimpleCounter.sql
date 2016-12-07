@@ -1,0 +1,7 @@
+CREATE OR REPLACE STREAM "DESTINATION_SQL_STREAM" ("eventCategory" VARCHAR(50),"eventType" VARCHAR(50), "occurrenceCount" INTEGER, "TimeStamp" TimeStamp);
+
+CREATE OR REPLACE  PUMP "STREAM_PUMP" AS 
+INSERT INTO "DESTINATION_SQL_STREAM"
+SELECT STREAM "eventCategory", "eventType",SUM("occurrenceCount") as "occurrenceCount", ROWTIME as "TimeStamp"
+FROM "SOURCE_SQL_STREAM_001"
+GROUP BY "eventCategory","eventType", FLOOR(("SOURCE_SQL_STREAM_001".ROWTIME - TIMESTAMP '1970-01-01 00:00:00') SECOND / 10 TO SECOND);
