@@ -1,0 +1,315 @@
+Parameters: 
+  Bucketname: 
+    Type: String
+  CertificateArn:
+    Type: String
+  Domain:
+    Type: String
+
+
+
+Resources:
+
+############
+# Dashboard Server
+############
+    Dashboard:
+        Type: "AWS::EC2::Instance"
+        Properties: 
+            IamInstanceProfile: !Ref "DashboardInstanceProfile"
+            InstanceType: "t2.micro"
+            ImageId: "ami-0d77397e"
+            KeyName: "kp_Dashboard"
+            SubnetId: !Ref AZ1Subnet
+            SecurityGroupIds:
+                - !Ref "DashboardSecurityGroup"
+            UserData: 
+                Fn::Base64: !Sub |
+                    #!/bin/bash
+                    wget https://grafanarel.s3.amazonaws.com/builds/grafana_4.0.2-1481203731_amd64.deb -O /home/ubuntu/grafana_4.0.2-1481203731_amd64.deb
+                    apt-get install -y adduser libfontconfig
+                    dpkg -i /home/ubuntu/grafana_4.0.2-1481203731_amd64.deb
+                    service grafana-server start
+                    git clone https://github.com/AutoScout24/aws-signing-proxy.git /home/ubuntu/aws-signing-proxy
+                    rm /home/ubuntu/aws-signing-proxy/config.yaml.dist
+                    touch /home/ubuntu/aws-signing-proxy/config.yaml
+                    echo 'upstream_url: https://${ess.DomainEndpoint}' >> /home/ubuntu/aws-signing-proxy/config.yaml 
+                    echo 'upstream_service_name: es' >> /home/ubuntu/aws-signing-proxy/config.yaml 
+                    echo 'upstream_region: eu-west-1' >> /home/ubuntu/aws-signing-proxy/config.yaml 
+                    echo 'listen_port: 8080' >> /home/ubuntu/aws-signing-proxy/config.yaml 
+
+    DashboardSecurityGroup:
+        Type: "AWS::EC2::SecurityGroup"
+        Properties: 
+            GroupDescription: "Allows SSH access and traffic from the ELB"
+            VpcId: !Ref DashboardVpc
+            SecurityGroupIngress:
+                - CidrIp: "0.0.0.0/0"
+                  FromPort: 22
+                  ToPort: 22
+                  IpProtocol: "tcp"
+                - SourceSecurityGroupId: !Ref DashboardElbSecurityGroup
+                  FromPort: 3000
+                  ToPort: 3000
+                  IpProtocol: "tcp"
+
+    DashboardRole:
+        Type: "AWS::IAM::Role"
+        Properties: 
+            AssumeRolePolicyDocument: 
+                Version: "2012-10-17"
+                Statement: 
+                - 
+                    Effect: "Allow"
+                    Principal: 
+                        Service: 
+                            - "ec2.amazonaws.com"
+                    Action: 
+                    - "sts:AssumeRole"
+            ManagedPolicyArns:
+                - "arn:aws:iam::aws:policy/AmazonESFullAccess" 
+            RoleName: "DashboardRole"
+
+    DashboardInstanceProfile:
+        Type: "AWS::IAM::InstanceProfile"
+        Properties: 
+            Path: "/"
+            Roles:
+                - Ref: "DashboardRole" 
+
+
+############
+# Kinesis Stream
+############
+    GatherStream:
+        Type: "AWS::Kinesis::Stream"
+        Properties:
+            Name: "GatherStream"
+            ShardCount: 1
+
+
+############
+# ElasticSearch Cluster
+############
+    ess:
+        Type: "AWS::Elasticsearch::Domain"
+        Properties: 
+            DomainName: "ess"
+            EBSOptions:
+                EBSEnabled: true
+                VolumeSize: 10
+                VolumeType: "gp2"
+            ElasticsearchClusterConfig:
+                DedicatedMasterEnabled: false
+                InstanceCount: 1
+                InstanceType: "t2.micro.elasticsearch"
+                ZoneAwarenessEnabled: false
+            ElasticsearchVersion: "2.3"
+
+
+############
+# Firehose Delivery Stream
+############
+    FirehoseBackupBucket:
+        Type: "AWS::S3::Bucket"
+        Properties: 
+            BucketName: !Ref Bucketname
+
+    DeliveryStreamRole:
+        Type: "AWS::IAM::Role"
+        Properties: 
+            AssumeRolePolicyDocument: 
+                Version: "2012-10-17"
+                Statement: 
+                - 
+                    Effect: "Allow"
+                    Principal: 
+                        Service: 
+                            - "firehose.amazonaws.com"
+                    Action: 
+                    - "sts:AssumeRole"
+            ManagedPolicyArns:
+                - "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+                - "arn:aws:iam::aws:policy/AmazonESFullAccess" 
+            RoleName: "DeliveryStreamRole"
+
+    DeliveryStream:
+        Type: "AWS::KinesisFirehose::DeliveryStream"
+        Properties:
+            DeliveryStreamName: "DeliveryStream"
+            ElasticsearchDestinationConfiguration:
+                BufferingHints:
+                    IntervalInSeconds: 60
+                    SizeInMBs: 1
+                DomainARN: !GetAtt ess.DomainArn
+                IndexName: "simplecounter"
+                IndexRotationPeriod: "NoRotation"
+                RetryOptions:
+                    DurationInSeconds: 300
+                TypeName: "counter"
+                RoleARN: !GetAtt DeliveryStreamRole.Arn
+                S3BackupMode: "FailedDocumentsOnly"
+                S3Configuration:
+                    BucketARN: !Join [ "", [ "arn:aws:s3:::", !Ref Bucketname] ]
+                    RoleARN: !GetAtt DeliveryStreamRole.Arn
+                    BufferingHints:
+                        IntervalInSeconds: 300
+                        SizeInMBs: 5
+                    CompressionFormat: "UNCOMPRESSED"
+                    Prefix: ""
+
+
+############
+# VPC
+############
+    DashboardVpc:
+        Type: "AWS::EC2::VPC"
+        Properties: 
+            CidrBlock: "10.33.0.0/16"
+
+    AZ1Subnet:
+        Type: "AWS::EC2::Subnet"
+        Properties: 
+            AvailabilityZone: "eu-west-1a"
+            MapPublicIpOnLaunch: true
+            CidrBlock: "10.33.1.0/24"
+            VpcId: !Ref DashboardVpc
+
+    AZ2Subnet:
+        Type: "AWS::EC2::Subnet"
+        Properties: 
+            AvailabilityZone: "eu-west-1b"
+            CidrBlock: "10.33.2.0/24"
+            VpcId: !Ref DashboardVpc
+
+    AZ1SubnetRouteTableAssociation:       
+        Type: "AWS::EC2::SubnetRouteTableAssociation"
+        Properties: 
+            RouteTableId: !Ref DashboardRouteTable
+            SubnetId: !Ref AZ1Subnet
+
+    AZ2SubnetRouteTableAssociation:       
+        Type: "AWS::EC2::SubnetRouteTableAssociation"
+        Properties: 
+            RouteTableId: !Ref DashboardRouteTable
+            SubnetId: !Ref AZ2Subnet
+
+    DashboardRouteTable:
+        Type: "AWS::EC2::RouteTable"
+        Properties: 
+            VpcId: !Ref DashboardVpc
+
+    DashboardRouteTableInternetRoute:
+        Type: "AWS::EC2::Route"
+        Properties: 
+            RouteTableId: !Ref DashboardRouteTable
+            DestinationCidrBlock: "0.0.0.0/0"
+            GatewayId: !Ref DashboardInternetGateway
+
+    DashboardInternetGateway:
+        Type: "AWS::EC2::InternetGateway"
+        Properties:
+            Tags:
+                - Key: "Name"
+                  Value: "DashboardInternetGateway"
+
+    DashboardInternetGatewayAttachment:
+        Type: "AWS::EC2::VPCGatewayAttachment"
+        Properties: 
+            InternetGatewayId: !Ref DashboardInternetGateway
+            VpcId: !Ref DashboardVpc
+
+
+############
+# Elastic Load Balancer
+############
+    elb:
+        Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+        Properties:
+            Name: "dashboard-elb"
+            Scheme: "internet-facing"
+            SecurityGroups:
+                - !Ref DashboardElbSecurityGroup
+            Subnets:
+                - !Ref AZ1Subnet
+                - !Ref AZ2Subnet
+
+    DashboardElbSecurityGroup:
+        Type: "AWS::EC2::SecurityGroup"
+        Properties: 
+            GroupDescription: "Allows HTTPS Traffic"
+            VpcId: !Ref DashboardVpc
+            SecurityGroupIngress:
+                - CidrIp: "0.0.0.0/0"
+                  FromPort: 443
+                  ToPort: 443
+                  IpProtocol: "tcp"
+
+    DashboardTargetGroup:
+        Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+        Properties:
+            Name: "DashboardTargetGroup"
+            HealthCheckIntervalSeconds: 10
+            HealthCheckPath: /login
+            HealthCheckPort: 3000
+            HealthCheckProtocol: "HTTP"
+            HealthCheckTimeoutSeconds: 3
+            HealthyThresholdCount: 2
+            Port: 3000
+            Protocol: "HTTP"
+            Targets:
+                - Id: !Ref Dashboard
+            UnhealthyThresholdCount: 2
+            VpcId: !Ref DashboardVpc
+
+    DashboardElbListener:
+        Type: "AWS::ElasticLoadBalancingV2::Listener"
+        Properties: 
+            Certificates:
+                - CertificateArn: !Ref CertificateArn
+            DefaultActions:
+                - TargetGroupArn: !Ref DashboardTargetGroup
+                  Type: "forward"
+            LoadBalancerArn: !Ref elb
+            Port: 443
+            Protocol: "HTTPS"
+
+    DnsEntry:
+        Type: "AWS::Route53::RecordSet"
+        Properties: 
+            AliasTarget:
+                DNSName: !GetAtt elb.DNSName
+                EvaluateTargetHealth: false
+                HostedZoneId: "Z32O12XQLNTSW2"
+            HostedZoneName: !Ref Domain
+            Name: !Join ["", ["dashboard.", !Ref Domain]]
+            Type: "A"
+
+
+############
+# Simulator
+############
+    SimulatorIamUser:
+        Type: "AWS::IAM::User"
+        Properties: 
+            ManagedPolicyArns:
+                - "arn:aws:iam::aws:policy/AmazonKinesisAnalyticsFullAccess"
+            UserName: "SimulatorIamUser"
+
+    SimulatorIamUserAccessKey:
+        Type: "AWS::IAM::AccessKey"
+        Properties: 
+            UserName: !Ref SimulatorIamUser
+
+
+
+Outputs:
+    AccessKey:
+        Description: "AccessKey for User 'SimulatorIamUser'"
+        Value: !Ref SimulatorIamUserAccessKey
+    SecretAccessKey:
+        Description: "SecretAccessKey for User 'SimulatorIamUser'"
+        Value: !GetAtt SimulatorIamUserAccessKey.SecretAccessKey
+    DashboardIP:
+        Description: "IP of EC2 Instance with Grafana"
+        Value: !GetAtt Dashboard.PublicIp
