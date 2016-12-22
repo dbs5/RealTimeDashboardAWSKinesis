@@ -1,6 +1,7 @@
-# RealTimeDashboardAWSKinesis
+# RealTime Dashboard with AWS-Kinesis
 
-Sample Project and required script for my Walkthrough of "Building a near RealTime Dashboard with AWS Kinesis"
+Sample Project and required script for my [Walkthrough](https://www.youtube.com/playlist?list=PLgdxjZ4O9pO7aReKC1PE6oAA9wTuoFDTS) of "Building a near RealTime Dashboard with AWS Kinesis"
+
 
 ## CloudFormation
 - The Template is build for use in eu-west-1 (Ireland, Dublin). If you want to use it in a different region you have to change the following
