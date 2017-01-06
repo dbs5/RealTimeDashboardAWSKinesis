@@ -9,3 +9,6 @@ Sample Project and required script for my [Walkthrough](https://www.youtube.com/
     - set line 21 to the AMI IDs of Ubuntu Server 16.04 LTS in your region
 - An existing keypair named *kp_Dashboard* is required
 - An existing Certificate and HostedZone are required
+
+## Contact 
+Twitter: @Dan_BeyondScale
